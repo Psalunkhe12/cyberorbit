@@ -1,0 +1,6 @@
+{
+  "name": "CyberOrbit SOC Command",
+  "description": "Next-gen Security Operations Center dashboard with AI threat intelligence, live traffic inspection, attack replay, and rule management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
