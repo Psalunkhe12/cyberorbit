@@ -27,10 +27,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const mainMenuNav = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+    { id: 'incidents', label: 'Incidents', icon: ShieldAlert },
     { id: 'traffic', label: 'Live Traffic', icon: Activity },
     { id: 'threats', label: 'Threat Intel', icon: ShieldAlert },
     { id: 'alerts', label: 'Alerts Console', icon: Bell },
   ] as const;
+
 
   const opsNav = [
     { id: 'rules', label: 'Rules Engine', icon: SlidersHorizontal },

@@ -3,11 +3,60 @@ export type NavigationTab =
   | 'traffic'
   | 'threats'
   | 'alerts'
+  | 'incidents'
   | 'rules'
   | 'replay'
   | 'reports';
 
 export type SeverityLevel = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+
+export type IncidentStatusType =
+  | 'OPEN'
+  | 'ACKNOWLEDGED'
+  | 'INVESTIGATING'
+  | 'CONTAINED'
+  | 'RESOLVED'
+  | 'FALSE_POSITIVE'
+  | 'UNREVIEWED'
+  | 'CONFIRMED'
+  | 'MITIGATED'
+  | 'DISMISSED';
+
+export interface RelatedAlertItem {
+  id: string;
+  rule_id: string;
+  rule_name: string;
+  severity: SeverityLevel;
+  confidence: number;
+  source_ip: string;
+  destination_ip: string;
+  evidence: string;
+  timestamp: string;
+}
+
+export interface CyberIncident {
+  id: string;
+  alert_id?: string;
+  title: string;
+  severity: SeverityLevel;
+  status: IncidentStatusType;
+  source_ip: string;
+  target_asset: string;
+  attack_vector: string;
+  confidence: number;
+  risk_score: number;
+  summary?: string;
+  assigned_to?: string;
+  rule_ids?: string[];
+  alert_count?: number;
+  evidence_summary?: string;
+  related_alerts?: RelatedAlertItem[];
+  first_seen_at: string;
+  last_seen_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
 
 export interface AnomalyEvent {
   id: string;

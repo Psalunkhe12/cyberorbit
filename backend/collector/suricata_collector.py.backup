@@ -1,0 +1,450 @@
+import os
+import sys
+import json
+import time
+import uuid
+import hashlib
+import logging
+import argparse
+from pathlib import Path
+from typing import List, Dict, Any, Generator, Optional, Set
+try:
+    from dotenv import load_dotenv
+    HAS_DOTENV = True
+except ImportError:
+    HAS_DOTENV = False
+
+# Load environment variables from .env if present
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+dotenv_path = BASE_DIR / ".env"
+if HAS_DOTENV and dotenv_path.exists():
+    load_dotenv(dotenv_path)
+
+# Configure Logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger("SuricataCollector")
+
+# Try loading Supabase client library
+try:
+    from supabase import create_client, Client
+    HAS_SUPABASE = True
+except ImportError:
+    HAS_SUPABASE = False
+    Client = Any
+
+
+class SuricataCollector:
+    """
+    Production Suricata EVE Ingestion Pipeline for CyberOrbit SOC.
+    Reads, parses, normalizes, deduplicates, and ingests Suricata logs into Supabase.
+    """
+
+    ASSET_MAP = {
+        80: "edge-api-01",
+        443: "auth-gateway-01",
+        3000: "soc-dashboard-web",
+        5432: "db-cluster-primary",
+        22: "bastion-ssh-01",
+        53: "dns-resolver-04",
+        8080: "app-server-02"
+    }
+
+    def __init__(
+        self,
+        log_path: Optional[Path] = None,
+        supabase_url: Optional[str] = None,
+        supabase_key: Optional[str] = None,
+        batch_size: int = 50
+    ):
+        # Resolve EVE JSON path from argument or environment variable
+        env_log_path = os.getenv("EVE_JSON_PATH")
+        if log_path:
+            self.log_path = Path(log_path)
+        elif env_log_path:
+            self.log_path = Path(env_log_path)
+        else:
+            self.log_path = BASE_DIR / "security-data" / "suricata-output" / "eve.json"
+
+        # Resolve Supabase Credentials
+        self.supabase_url = (supabase_url or os.getenv("SUPABASE_URL") or os.getenv("VITE_SUPABASE_URL") or "").strip().replace(".cos", ".co")
+        self.supabase_key = (
+            supabase_key or
+            os.getenv("SUPABASE_SERVICE_ROLE_KEY") or
+            os.getenv("SUPABASE_KEY") or
+            os.getenv("VITE_SUPABASE_ANON_KEY") or
+            os.getenv("VITE_SUPABASE_PUBLISHABLE_KEY") or
+            ""
+        ).strip()
+        self.batch_size = int(os.getenv("COLLECTOR_BATCH_SIZE", batch_size))
+        
+        self.supabase_client: Optional[Client] = None
+        if self.supabase_url and self.supabase_key and HAS_SUPABASE:
+            try:
+                self.supabase_client = create_client(self.supabase_url, self.supabase_key)
+                logger.info(f"Connected to Supabase endpoint: {self.supabase_url}")
+            except Exception as e:
+                logger.warning(f"Failed to initialize Supabase client: {e}")
+        else:
+            logger.warning("Supabase credentials not configured. Operating in DRY-RUN mode.")
+
+        # Deduplication cache (stores SHA256 event signatures)
+        self.seen_event_ids: Set[str] = set()
+
+    @staticmethod
+    def generate_event_id(raw_event: Dict[str, Any]) -> str:
+        """
+        Generates a deterministic UUID based on event contents to prevent duplicates.
+        """
+        event_type = raw_event.get("event_type", "unknown")
+        timestamp = raw_event.get("timestamp", "")
+        src_ip = raw_event.get("src_ip", "")
+        src_port = raw_event.get("src_port", "")
+        dest_ip = raw_event.get("dest_ip", "")
+        dest_port = raw_event.get("dest_port", "")
+        flow_id = raw_event.get("flow_id", "")
+
+        unique_str = f"{event_type}_{timestamp}_{src_ip}_{src_port}_{dest_ip}_{dest_port}_{flow_id}"
+        if event_type == "alert":
+            alert_sig = raw_event.get("alert", {}).get("signature_id", "")
+            unique_str += f"_{alert_sig}"
+
+        sha256_hash = hashlib.sha256(unique_str.encode("utf-8")).hexdigest()
+        return str(uuid.UUID(sha256_hash[:32]))
+
+    @classmethod
+    def resolve_asset(cls, dest_ip: str, dest_port: Optional[int]) -> str:
+        if dest_port and dest_port in cls.ASSET_MAP:
+            return cls.ASSET_MAP[dest_port]
+        if dest_ip.startswith("127.") or dest_ip.startswith("10.") or dest_ip.startswith("192.168."):
+            return f"internal-asset-{dest_ip.split('.')[-1]}"
+        return f"target-{dest_ip}"
+
+    @classmethod
+    def map_suricata_severity(cls, sev: int) -> str:
+        if sev <= 1:
+            return "CRITICAL"
+        elif sev == 2:
+            return "HIGH"
+        elif sev == 3:
+            return "MEDIUM"
+        else:
+            return "LOW"
+
+    def normalize_event(self, raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Normalizes a Suricata event for DB schema ingestion.
+        Supports: alert, flow, dns, http, tls, stats.
+        """
+        event_type = raw.get("event_type")
+        if not event_type:
+            return None
+
+        event_id = self.generate_event_id(raw)
+        timestamp = raw.get("timestamp", "")
+        src_ip = raw.get("src_ip")
+        src_port = raw.get("src_port")
+        dest_ip = raw.get("dest_ip")
+        dest_port = raw.get("dest_port")
+        proto = raw.get("proto")
+
+        if event_type == "alert":
+            alert_info = raw.get("alert", {})
+            suricata_sev = alert_info.get("severity", 3)
+            sig_name = alert_info.get("signature", "Suricata Intrusion Alert")
+            category = alert_info.get("category", "Intrusion Detection")
+            payload = alert_info.get("payload_printable", f"Signature ID: {alert_info.get('signature_id', 'N/A')}")
+            asset = self.resolve_asset(dest_ip or "", dest_port)
+
+            return {
+                "target_table": "alerts",
+                "data": {
+                    "id": event_id,
+                    "severity": self.map_suricata_severity(suricata_sev),
+                    "event": sig_name,
+                    "source_ip": src_ip or "0.0.0.0",
+                    "destination_ip": dest_ip or "0.0.0.0",
+                    "source_port": src_port,
+                    "destination_port": dest_port,
+                    "protocol": proto,
+                    "asset": asset,
+                    "timestamp": timestamp,
+                    "status": "UNREVIEWED",
+                    "confidence": 90 if suricata_sev <= 2 else 75,
+                    "payload_snippet": payload,
+                    "geo_origin": "UNKNOWN",
+                    "attack_vector": category,
+                    "detected_at": timestamp
+                }
+            }
+
+        elif event_type in ["flow", "dns", "http", "tls"]:
+            application = None
+            bytes_in = 0
+            bytes_out = 0
+            packets_in = 0
+            packets_out = 0
+            duration = None
+
+            if event_type == "flow":
+                flow = raw.get("flow", {})
+                bytes_in = flow.get("bytes_toserver", 0)
+                bytes_out = flow.get("bytes_toclient", 0)
+                packets_in = flow.get("pkts_toserver", 0)
+                packets_out = flow.get("pkts_toclient", 0)
+                duration = flow.get("age")
+            elif event_type == "http":
+                http = raw.get("http", {})
+                method = http.get("http_method", "GET")
+                host = http.get("hostname", dest_ip)
+                url = http.get("url", "/")
+                application = f"{method} http://{host}{url}"
+            elif event_type == "dns":
+                dns = raw.get("dns", {})
+                rrname = dns.get("rrname", "unknown")
+                rrtype = dns.get("rrtype", "A")
+                application = f"DNS {rrtype} {rrname}"
+            elif event_type == "tls":
+                tls = raw.get("tls", {})
+                application = f"TLS SNI: {tls.get('sni', 'unknown')}"
+
+            return {
+                "target_table": "network_events",
+                "data": {
+                    "id": event_id,
+                    "timestamp": timestamp,
+                    "source_ip": src_ip,
+                    "source_port": src_port,
+                    "destination_ip": dest_ip,
+                    "destination_port": dest_port,
+                    "protocol": proto,
+                    "event_type": event_type,
+                    "bytes_in": bytes_in,
+                    "bytes_out": bytes_out,
+                    "packets_in": packets_in,
+                    "packets_out": packets_out,
+                    "duration": duration,
+                    "application": application,
+                    "source": "suricata",
+                    "raw_event": raw
+                }
+            }
+
+        elif event_type == "stats":
+            stats = raw.get("stats", {})
+            decoder = stats.get("decoder", {})
+            flow_stats = stats.get("flow", {})
+
+            return {
+                "target_table": "traffic_metrics",
+                "data": {
+                    "id": event_id,
+                    "timestamp": timestamp,
+                    "throughput_mbps": round((decoder.get("bytes", 0) * 8) / (1000 * 1000), 2),
+                    "packets_per_second": decoder.get("pkts", 0),
+                    "active_connections": flow_stats.get("active", 0),
+                    "inbound_bytes": decoder.get("bytes", 0),
+                    "inbound_packets": decoder.get("pkts", 0),
+                    "threat_count": stats.get("detect", {}).get("alert", 0),
+                    "source": "suricata"
+                }
+            }
+
+        return None
+
+    def send_batch_to_supabase(self, normalized_records: List[Dict[str, Any]]) -> Dict[str, int]:
+        """
+        Groups normalized records by target table and executes bulk upserts to Supabase.
+        """
+        counts = {"alerts": 0, "network_events": 0, "traffic_metrics": 0, "errors": 0}
+        if not normalized_records:
+            return counts
+
+        grouped: Dict[str, List[Dict[str, Any]]] = {
+            "alerts": [],
+            "network_events": [],
+            "traffic_metrics": []
+        }
+
+        for rec in normalized_records:
+            tbl = rec.get("target_table")
+            data = rec.get("data")
+            if tbl in grouped and data:
+                grouped[tbl].append(data)
+
+        # Resolve credentials check
+        self.supabase_url = self.supabase_url.strip().replace(".cos", ".co")
+
+        if not self.supabase_url or not self.supabase_key:
+            for tbl, items in grouped.items():
+                counts[tbl] += len(items)
+            logger.info(f"[DRY-RUN] Processed batch: {counts['alerts']} alerts, {counts['network_events']} network_events, {counts['traffic_metrics']} metrics.")
+            return counts
+
+        for table_name, items in grouped.items():
+            if not items:
+                continue
+            
+            # 1. Try Supabase Python SDK if initialized
+            if self.supabase_client:
+                try:
+                    res = self.supabase_client.from_(table_name).upsert(items).execute()
+                    counts[table_name] += len(items)
+                    logger.info(f"Ingested {len(items)} records into Supabase table '{table_name}' (SDK).")
+                    continue
+                except Exception as err:
+                    logger.warning(f"SDK upsert to '{table_name}' failed ({err}). Trying REST API...")
+
+            # 2. Try REST API with requests library
+            try:
+                import requests
+                headers = {
+                    "apikey": self.supabase_key,
+                    "Authorization": f"Bearer {self.supabase_key}",
+                    "Content-Type": "application/json",
+                    "Prefer": "resolution=merge-duplicates"
+                }
+                endpoint = f"{self.supabase_url}/rest/v1/{table_name}"
+                resp = requests.post(endpoint, headers=headers, json=items)
+                if resp.status_code in [200, 201, 204]:
+                    counts[table_name] += len(items)
+                    logger.info(f"Ingested {len(items)} records into Supabase table '{table_name}' (REST API).")
+                else:
+                    counts["errors"] += len(items)
+                    logger.error(f"Failed to ingest batch into '{table_name}' via REST API (HTTP {resp.status_code}): {resp.text[:200]}")
+            except Exception as err:
+                counts["errors"] += len(items)
+                logger.error(f"Failed to execute REST API ingestion for '{table_name}': {err}")
+
+        return counts
+
+    def run_once(self) -> Dict[str, int]:
+        """
+        Processes eve.json from start to finish once and exits.
+        """
+        logger.info(f"Starting ingestion run on: {self.log_path}")
+        if not self.log_path.exists():
+            logger.error(f"Log file not found: {self.log_path}")
+            return {"total_lines": 0, "ingested": 0, "skipped_duplicates": 0, "malformed": 0}
+
+        total_lines = 0
+        malformed = 0
+        skipped_duplicates = 0
+        batch: List[Dict[str, Any]] = []
+        total_counts = {"alerts": 0, "network_events": 0, "traffic_metrics": 0, "errors": 0}
+
+        with open(self.log_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                total_lines += 1
+                line_str = line.strip()
+                if not line_str:
+                    continue
+                try:
+                    raw_event = json.loads(line_str)
+                except json.JSONDecodeError:
+                    malformed += 1
+                    logger.warning(f"Malformed JSON on line {total_lines}: {line_str[:80]}")
+                    continue
+
+                event_id = self.generate_event_id(raw_event)
+                if event_id in self.seen_event_ids:
+                    skipped_duplicates += 1
+                    continue
+                self.seen_event_ids.add(event_id)
+
+                norm = self.normalize_event(raw_event)
+                if norm:
+                    batch.append(norm)
+
+                if len(batch) >= self.batch_size:
+                    counts = self.send_batch_to_supabase(batch)
+                    for k in total_counts:
+                        total_counts[k] += counts.get(k, 0)
+                    batch.clear()
+
+        # Flush remaining batch
+        if batch:
+            counts = self.send_batch_to_supabase(batch)
+            for k in total_counts:
+                total_counts[k] += counts.get(k, 0)
+            batch.clear()
+
+        logger.info(
+            f"Ingestion complete: Read {total_lines} lines | "
+            f"Ingested {sum(total_counts.values()) - total_counts['errors']} events | "
+            f"Duplicates Skipped: {skipped_duplicates} | Malformed: {malformed}"
+        )
+        return {
+            "total_lines": total_lines,
+            "ingested": sum(total_counts.values()) - total_counts['errors'],
+            "skipped_duplicates": skipped_duplicates,
+            "malformed": malformed
+        }
+
+    def watch(self, poll_interval: float = 1.0):
+        """
+        Monitors eve.json continuously, ingesting existing lines and tailing new events.
+        """
+        logger.info(f"Starting continuous watch mode on: {self.log_path}")
+        # Run initial pass
+        self.run_once()
+
+        # Tail file for new lines
+        with open(self.log_path, "r", encoding="utf-8", errors="ignore") as f:
+            f.seek(0, os.SEEK_END)
+            batch: List[Dict[str, Any]] = []
+            
+            while True:
+                line = f.readline()
+                if not line:
+                    if batch:
+                        self.send_batch_to_supabase(batch)
+                        batch.clear()
+                    time.sleep(poll_interval)
+                    continue
+
+                line_str = line.strip()
+                if not line_str:
+                    continue
+                try:
+                    raw_event = json.loads(line_str)
+                except json.JSONDecodeError:
+                    logger.warning(f"Malformed JSON in watch stream: {line_str[:80]}")
+                    continue
+
+                event_id = self.generate_event_id(raw_event)
+                if event_id in self.seen_event_ids:
+                    continue
+                self.seen_event_ids.add(event_id)
+
+                norm = self.normalize_event(raw_event)
+                if norm:
+                    batch.append(norm)
+
+                if len(batch) >= self.batch_size:
+                    self.send_batch_to_supabase(batch)
+                    batch.clear()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="CyberOrbit Suricata Log Collector & Supabase Ingestion Engine")
+    parser.add_argument("--once", action="store_true", help="Run once through eve.json and exit")
+    parser.add_argument("--watch", action="store_true", help="Continuously monitor and tail eve.json")
+    parser.add_argument("--log-path", type=str, help="Path to Suricata eve.json log file")
+    args = parser.parse_args()
+
+    log_path = Path(args.log_path) if args.log_path else None
+    collector = SuricataCollector(log_path=log_path)
+
+    if args.watch:
+        collector.watch()
+    else:
+        # Default to --once mode
+        collector.run_once()
+
+
+if __name__ == "__main__":
+    main()

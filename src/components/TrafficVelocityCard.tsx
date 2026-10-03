@@ -77,41 +77,51 @@ export const TrafficVelocityCard: React.FC<TrafficVelocityCardProps> = ({
       </div>
 
       <div className="h-[220px] w-full mt-2">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-            <defs>
-              <linearGradient id="goldGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#d49b28" stopOpacity={0.4} />
-                <stop offset="100%" stopColor="#d49b28" stopOpacity={0.0} />
-              </linearGradient>
-              <linearGradient id="redGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#d94b4b" stopOpacity={0.4} />
-                <stop offset="100%" stopColor="#d94b4b" stopOpacity={0.0} />
-              </linearGradient>
-            </defs>
-            <XAxis dataKey="time" stroke="#9cb1ae" fontSize={10} tickLine={false} axisLine={false} />
-            <YAxis stroke="#9cb1ae" fontSize={10} tickLine={false} axisLine={false} />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: '#334d4a',
-                borderColor: '#d49b28',
-                borderRadius: '12px',
-                color: '#ffffff',
-                fontSize: '12px',
-                fontWeight: '600',
-              }}
-              labelStyle={{ color: '#d49b28' }}
-            />
-            <Area
-              type="monotone"
-              dataKey={metricKey}
-              stroke={metricKey === 'threatRequests' ? '#d94b4b' : '#d49b28'}
-              strokeWidth={3}
-              fillOpacity={1}
-              fill={`url(#${metricKey === 'threatRequests' ? 'redGrad' : 'goldGrad'})`}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
+        {data.length === 0 ? (
+          <div className="h-full w-full flex flex-col items-center justify-center bg-[#f8faf9] rounded-2xl border border-dashed border-[#c2d1cc] p-6 text-center">
+            <Zap className="w-8 h-8 text-[#9cb1ae] mb-2 opacity-60" />
+            <p className="text-xs font-bold text-[#334d4a] m-0">No Traffic Telemetry Metrics</p>
+            <p className="text-[11px] text-[#6c8582] mt-1 m-0">
+              No traffic telemetry points recorded in database. Waiting for ingress network traffic.
+            </p>
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <defs>
+                <linearGradient id="goldGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#d49b28" stopOpacity={0.4} />
+                  <stop offset="100%" stopColor="#d49b28" stopOpacity={0.0} />
+                </linearGradient>
+                <linearGradient id="redGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#d94b4b" stopOpacity={0.4} />
+                  <stop offset="100%" stopColor="#d94b4b" stopOpacity={0.0} />
+                </linearGradient>
+              </defs>
+              <XAxis dataKey="time" stroke="#9cb1ae" fontSize={10} tickLine={false} axisLine={false} />
+              <YAxis stroke="#9cb1ae" fontSize={10} tickLine={false} axisLine={false} />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: '#334d4a',
+                  borderColor: '#d49b28',
+                  borderRadius: '12px',
+                  color: '#ffffff',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                }}
+                labelStyle={{ color: '#d49b28' }}
+              />
+              <Area
+                type="monotone"
+                dataKey={metricKey}
+                stroke={metricKey === 'threatRequests' ? '#d94b4b' : '#d49b28'}
+                strokeWidth={3}
+                fillOpacity={1}
+                fill={`url(#${metricKey === 'threatRequests' ? 'redGrad' : 'goldGrad'})`}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        )}
       </div>
     </div>
   );

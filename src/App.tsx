@@ -3,6 +3,9 @@ import { Sidebar } from './components/Sidebar';
 import { TopHeader } from './components/TopHeader';
 import { Toast } from './components/Toast';
 import { RoleSwitcherModal } from './components/RoleSwitcherModal';
+import { LoginFormModal } from './components/LoginFormModal';
+import { UserProfileModal } from './components/UserProfileModal';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import {
   NavigationTab,
   Operator,
@@ -12,15 +15,15 @@ import {
   TrafficPoint,
   ChatMessage,
 } from './types';
-import {
-  INITIAL_TRAFFIC_DATA,
-  INITIAL_ANOMALIES,
-  INITIAL_RULES,
-  INITIAL_THREAT_VECTOR,
-  OPERATOR_PROFILES,
-} from './data/mockData';
+import { OPERATOR_PROFILES } from './data/mockData';
+
+import { useRealtimeAlerts } from './hooks/useRealtimeAlerts';
+import { useRealtimeNetworkEvents } from './hooks/useRealtimeNetworkEvents';
+import { useRealtimeRules } from './hooks/useRealtimeRules';
+import { useRealtimeThreatIntel } from './hooks/useRealtimeThreatIntel';
 
 import { OverviewView } from './views/OverviewView';
+import { IncidentsView } from './views/IncidentsView';
 import { LiveTrafficView } from './views/LiveTrafficView';
 import { ThreatIntelView } from './views/ThreatIntelView';
 import { AlertsConsoleView } from './views/AlertsConsoleView';
@@ -28,50 +31,34 @@ import { RulesEngineView } from './views/RulesEngineView';
 import { AttackReplayView } from './views/AttackReplayView';
 import { ReportsView } from './views/ReportsView';
 
-export default function App() {
+function CyberOrbitApp() {
   const [activeTab, setActiveTab] = useState<NavigationTab>('overview');
   const [searchQuery, setSearchQuery] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const {
+    isLoginModalOpen,
+    setIsLoginModalOpen,
+    isProfileModalOpen,
+    setIsProfileModalOpen,
+    permissions,
+  } = useAuth();
 
   // Operator Profile
   const [operator, setOperator] = useState<Operator>(OPERATOR_PROFILES[0]);
   const [isRoleModalOpen, setIsRoleModalOpen] = useState(false);
 
-  // Metrics State
-  const [throughput, setThroughput] = useState('1.84');
-  const [activeFlows, setActiveFlows] = useState(18429);
-  const [threatsCount, setThreatsCount] = useState(7);
-  const [mitigatedCount, setMitigatedCount] = useState(24);
-
-  // Simulation & Stream
+  // Simulation & Stream Control
   const [isSimulating, setIsSimulating] = useState(false);
   const [isLiveTraffic, setIsLiveTraffic] = useState(true);
 
-  // Telemetry Collections
-  const [trafficData, setTrafficData] = useState<TrafficPoint[]>(INITIAL_TRAFFIC_DATA);
-  const [threatVector, setThreatVector] = useState<ThreatVector>(INITIAL_THREAT_VECTOR);
-  const [anomalies, setAnomalies] = useState<AnomalyEvent[]>(INITIAL_ANOMALIES);
-  const [rules, setRules] = useState<SecurityRule[]>(INITIAL_RULES);
-
-  // Orbit AI Chat State
+  // Copilot Chat State
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     {
       id: 'msg-0',
       sender: 'bot',
-      text: 'Traffic elevated on edge-api-02. Rate limiting applied automatically.',
-      timestamp: '15:30',
-    },
-    {
-      id: 'msg-1',
-      sender: 'user',
-      text: 'What is the priority item?',
-      timestamp: '15:31',
-    },
-    {
-      id: 'msg-2',
-      sender: 'bot',
-      text: 'Review gateway-01 SYN anomaly. 91% confidence score.',
-      timestamp: '15:31',
+      text: 'CyberOrbit SOC Assistant active. Realtime database telemetry monitoring engaged.',
+      timestamp: '10:00',
     },
   ]);
   const [isCopilotLoading, setIsCopilotLoading] = useState(false);
@@ -89,6 +76,7 @@ export default function App() {
     setActiveTab(tab);
     const labels: Record<NavigationTab, string> = {
       overview: 'Overview',
+      incidents: 'Incidents Center',
       traffic: 'Live Traffic',
       threats: 'Threat Intel',
       alerts: 'Alerts Console',
@@ -99,38 +87,69 @@ export default function App() {
     triggerToast(`${labels[tab]} loaded`);
   };
 
-  // Live Traffic Simulation Loop
-  useEffect(() => {
-    if (!isLiveTraffic) return;
-    const interval = setInterval(() => {
-      setTrafficData((prev) => {
-        const last = prev[prev.length - 1];
-        const date = new Date();
-        const timeStr = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
-        const delta = (Math.random() * 0.1 - 0.05).toFixed(2);
-        const newGbps = Math.max(1.1, parseFloat((parseFloat(last.throughputGbps.toString()) + parseFloat(delta)).toFixed(2)));
-        const newFlows = Math.floor(last.activeFlows + (Math.random() * 200 - 100));
+  // Realtime Supabase Data Hooks
+  const { alerts: anomalies, setAlerts: setAnomalies } = useRealtimeAlerts();
+  const { networkEvents, trafficMetrics } = useRealtimeNetworkEvents();
+  const { rules, toggleRuleStatus, addRule } = useRealtimeRules();
+  const { primaryVector, isolateThreatVector } = useRealtimeThreatIntel();
 
-        const newPt: TrafficPoint = {
+  // Dynamically derive metrics and chart telemetry from real database rows
+  const trafficData: TrafficPoint[] = trafficMetrics.length > 0
+    ? trafficMetrics.slice(0, 10).reverse().map((m) => {
+        const d = new Date(m.timestamp);
+        const timeStr = isNaN(d.getTime())
+          ? String(m.timestamp || '').slice(11, 16) || '00:00'
+          : `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+        return {
           time: timeStr,
-          throughputGbps: newGbps,
-          activeFlows: newFlows,
-          threatRequests: Math.floor(Math.random() * 300 + 400),
-          synPackets: Math.floor(Math.random() * 2000 + 8000),
+          throughputGbps: typeof m.throughput_mbps === 'number' ? parseFloat((m.throughput_mbps / 1000).toFixed(2)) : 0,
+          activeFlows: m.active_connections || 0,
+          threatRequests: m.threat_count || 0,
+          synPackets: m.inbound_packets || 0,
         };
+      })
+    : [];
 
-        setThroughput(newGbps.toString());
-        setActiveFlows(newFlows);
+  const throughput = trafficData.length > 0
+    ? trafficData[trafficData.length - 1].throughputGbps.toFixed(2)
+    : '0.00';
 
-        return [...prev.slice(1), newPt];
-      });
-    }, 3000);
+  const activeFlows = trafficData.length > 0
+    ? trafficData[trafficData.length - 1].activeFlows
+    : networkEvents.length;
 
-    return () => clearInterval(interval);
-  }, [isLiveTraffic]);
+  const threatsCount = anomalies.filter((a) => a.status === 'UNREVIEWED' || a.status === 'CONFIRMED').length;
+  const mitigatedCount = anomalies.filter((a) => a.status === 'MITIGATED' || a.status === 'DISMISSED').length;
+
+  const threatVector: ThreatVector = primaryVector
+    ? {
+        origin: primaryVector.origin,
+        target: primaryVector.target,
+        originCode: primaryVector.originCode,
+        targetCode: primaryVector.targetCode,
+        riskScore: primaryVector.riskScore,
+        riskLabel: primaryVector.riskLabel,
+        attackType: primaryVector.attackType,
+        isIsolated: primaryVector.isIsolated,
+      }
+    : {
+        origin: 'No Threat Origin',
+        target: 'Perimeter Secure',
+        originCode: 'OK',
+        targetCode: 'OK',
+        riskScore: 0,
+        riskLabel: 'Nominal 0/100',
+        attackType: 'Nominal Telemetry',
+        isIsolated: false,
+      };
 
   // Run Simulation Handler
   const handleRunSimulation = async () => {
+    if (!permissions.canTriageAlerts) {
+      triggerToast('Permission Denied: Read-Only VIEWER role cannot run attack simulations.');
+      return;
+    }
+
     setIsSimulating(true);
     triggerToast('Synthetic simulation initiated');
 
@@ -144,7 +163,7 @@ export default function App() {
       if (data.anomaly) {
         const date = new Date();
         const timeStr = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}:${date.getSeconds().toString().padStart(2, '0')}`;
-        
+
         const newAnom: AnomalyEvent = {
           id: `evt-${Date.now()}`,
           severity: data.anomaly.severity || 'CRITICAL',
@@ -160,20 +179,7 @@ export default function App() {
         };
 
         setAnomalies((prev) => [newAnom, ...prev]);
-        setThreatsCount((prev) => prev + 1);
 
-        if (data.vector) {
-          setThreatVector((prev) => ({
-            ...prev,
-            origin: data.vector.origin || prev.origin,
-            target: data.vector.target || prev.target,
-            riskScore: data.vector.riskScore || 88,
-            riskLabel: `Elevated ${data.vector.riskScore || 88}/100`,
-            isIsolated: false,
-          }));
-        }
-
-        // Add Orbit AI Copilot notification
         setChatMessages((prev) => [
           ...prev,
           {
@@ -193,30 +199,25 @@ export default function App() {
 
   // Isolate Threat Vector Handler
   const handleIsolateVector = () => {
-    const nextIsolated = !threatVector.isIsolated;
-    setThreatVector((prev) => ({
-      ...prev,
-      isIsolated: nextIsolated,
-      riskLabel: nextIsolated ? 'Quarantined (8/100)' : 'Elevated 68/100',
-    }));
-
-    if (nextIsolated) {
-      setMitigatedCount((prev) => prev + 1);
-      triggerToast('Target vector isolated');
-    } else {
-      triggerToast('Target vector re-enabled');
+    if (!permissions.canApproveResponseActions) {
+      triggerToast('Permission Denied: Only SOC_LEAD or ADMIN roles can isolate vectors.');
+      return;
     }
+
+    isolateThreatVector();
+    triggerToast('Target threat vector isolated');
   };
 
   // Review & Confirm Anomaly
   const handleReviewAnomaly = (id: string) => {
+    if (!permissions.canTriageAlerts) {
+      triggerToast('Permission Denied: Read-Only VIEWER role cannot modify alert status.');
+      return;
+    }
+
     setAnomalies((prev) =>
       prev.map((a) => {
         if (a.id === id) {
-          if (a.status !== 'CONFIRMED' && a.status !== 'MITIGATED') {
-            setMitigatedCount((count) => count + 1);
-            setThreatsCount((t) => Math.max(0, t - 1));
-          }
           return { ...a, status: 'CONFIRMED' };
         }
         return a;
@@ -227,6 +228,11 @@ export default function App() {
 
   // Analyze Packet Payload with Gemini
   const handleAnalyzePayload = async (anomaly: AnomalyEvent) => {
+    if (!permissions.canTriggerAIAnalysis) {
+      triggerToast('Permission Denied: Read-Only VIEWER role cannot trigger AI analysis.');
+      return;
+    }
+
     setActiveTab('overview');
     triggerToast(`Analyzing ${anomaly.event}...`);
     setIsCopilotLoading(true);
@@ -292,54 +298,58 @@ export default function App() {
             activeFlows,
             threatsCount,
             mitigatedCount,
-            threatVector,
-            topAnomaly: anomalies[0],
           },
-          history: chatMessages.slice(-4),
         }),
       });
-
       const data = await res.json();
 
       const botMsg: ChatMessage = {
         id: `msg-bot-${Date.now()}`,
         sender: 'bot',
-        text: data.reply || `Correlated telemetry logs for "${text}". All edge gateways operating within threshold.`,
+        text: data.reply || 'Orbit AI completed analysis.',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
 
       setChatMessages((prev) => [...prev, botMsg]);
-    } catch (err: any) {
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          id: `msg-bot-${Date.now()}`,
-          sender: 'bot',
-          text: `Correlated telemetry logs for "${text}". All edge gateways operating within threshold.`,
-          timestamp: 'Just now',
-        },
-      ]);
+    } catch {
+      const fallbackMsg: ChatMessage = {
+        id: `msg-bot-${Date.now()}`,
+        sender: 'bot',
+        text: 'All edge proxies reporting normal state. SYN flood rate limiting active on gateway-01.',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+      setChatMessages((prev) => [...prev, fallbackMsg]);
     } finally {
       setIsCopilotLoading(false);
     }
   };
 
-  // Rule Toggle & Create
+  // Security Rule Toggle & Add Handlers
   const handleToggleRule = (id: string) => {
-    setRules((prev) =>
-      prev.map((r) =>
-        r.id === id ? { ...r, status: r.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE' } : r
-      )
-    );
-    triggerToast('Rule enforcement updated');
+    if (!permissions.canManageSecurityRules) {
+      triggerToast('Permission Denied: Only SOC_LEAD or ADMIN roles can modify firewall rules.');
+      return;
+    }
+    toggleRuleStatus(id);
+    triggerToast(`Toggled security rule status`);
   };
 
-  const handleAddRule = (newRule: SecurityRule) => {
-    setRules((prev) => [newRule, ...prev]);
-    triggerToast(`Rule "${newRule.name}" deployed to edge`);
+  const handleAddRule = (newRule: Omit<SecurityRule, 'id' | 'matchesCount' | 'lastTriggered'>) => {
+    if (!permissions.canManageSecurityRules) {
+      triggerToast('Permission Denied: Only SOC_LEAD or ADMIN roles can add new firewall rules.');
+      return;
+    }
+
+    const created: SecurityRule = {
+      ...newRule,
+      id: `rule-${Date.now()}`,
+      matchesCount: 0,
+      lastTriggered: 'Never',
+    };
+    addRule(created);
+    triggerToast(`Created new security rule ${created.name}`);
   };
 
-  // Filter anomalies based on search bar
   const filteredAnomalies = anomalies.filter(
     (a) =>
       a.event.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -348,13 +358,13 @@ export default function App() {
   );
 
   return (
-    <div className="flex min-h-screen bg-[#e8eceb] font-sans text-[#253835]">
+    <div className="flex bg-[#e8eceb] text-[#253835] font-sans antialiased min-h-screen">
       {/* Sidebar Navigation */}
       <Sidebar
         activeTab={activeTab}
         onTabChange={handleTabChange}
         operator={operator}
-        onOpenRoleModal={() => setIsRoleModalOpen(true)}
+        onOpenRoleModal={() => setIsProfileModalOpen(true)}
       />
 
       {/* Main Content Area */}
@@ -365,8 +375,6 @@ export default function App() {
           onSearchChange={setSearchQuery}
           onRunSimulation={handleRunSimulation}
           isSimulating={isSimulating}
-          operator={operator}
-          onOpenRoleModal={() => setIsRoleModalOpen(true)}
         />
 
         {/* Tab View Switching */}
@@ -390,6 +398,8 @@ export default function App() {
           />
         )}
 
+        {activeTab === 'incidents' && <IncidentsView onTriggerToast={triggerToast} />}
+
         {activeTab === 'traffic' && <LiveTrafficView />}
 
         {activeTab === 'threats' && <ThreatIntelView />}
@@ -399,6 +409,7 @@ export default function App() {
             anomalies={filteredAnomalies}
             onReviewAnomaly={handleReviewAnomaly}
             onAnalyzePayload={handleAnalyzePayload}
+            onTriggerToast={triggerToast}
           />
         )}
 
@@ -415,7 +426,23 @@ export default function App() {
         {activeTab === 'reports' && <ReportsView />}
       </main>
 
-      {/* Role Profile Switcher Modal */}
+      {/* Login & Sign Up Modal */}
+      {isLoginModalOpen && (
+        <LoginFormModal
+          onClose={() => setIsLoginModalOpen(false)}
+          onTriggerToast={triggerToast}
+        />
+      )}
+
+      {/* User Profile & Role Permissions Modal */}
+      {isProfileModalOpen && (
+        <UserProfileModal
+          onClose={() => setIsProfileModalOpen(false)}
+          onTriggerToast={triggerToast}
+        />
+      )}
+
+      {/* Legacy Role Switcher Backup */}
       <RoleSwitcherModal
         isOpen={isRoleModalOpen}
         onClose={() => setIsRoleModalOpen(false)}
@@ -429,5 +456,13 @@ export default function App() {
       {/* Bottom Floating Toast */}
       <Toast message={toastMessage} />
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <CyberOrbitApp />
+    </AuthProvider>
   );
 }

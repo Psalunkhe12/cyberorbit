@@ -18,6 +18,8 @@ coverage/
 .env.test
 .env.production
 !.env.example
+.env.local
+.env.*.local
 
 # Logs
 logs/

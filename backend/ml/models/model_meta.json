@@ -1,0 +1,16 @@
+{
+  "model_version": "v1.0.0",
+  "algorithm": "IsolationForest",
+  "features": [
+    "packets_per_second",
+    "bytes_per_second",
+    "connection_duration",
+    "destination_port",
+    "unique_destination_count",
+    "failed_connection_count",
+    "dns_request_count"
+  ],
+  "num_samples_trained": 1000,
+  "contamination": 0.05,
+  "created_at": "cyberorbit"
+}

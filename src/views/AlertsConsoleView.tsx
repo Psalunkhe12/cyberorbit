@@ -1,22 +1,26 @@
 import React, { useState } from 'react';
 import { AnomalyEvent, SeverityLevel } from '../types';
-import { Bell, ShieldCheck, Sparkles, Filter, CheckSquare, Square, Trash2 } from 'lucide-react';
+import { Bell, ShieldCheck, Sparkles, Filter, CheckSquare, Square, Trash2, Eye } from 'lucide-react';
+import { AlertDetailDrawer } from '../components/AlertDetailDrawer';
 
 interface AlertsConsoleViewProps {
   anomalies: AnomalyEvent[];
   onReviewAnomaly: (id: string) => void;
   onAnalyzePayload: (anomaly: AnomalyEvent) => void;
+  onTriggerToast: (msg: string) => void;
 }
 
 export const AlertsConsoleView: React.FC<AlertsConsoleViewProps> = ({
   anomalies,
   onReviewAnomaly,
   onAnalyzePayload,
+  onTriggerToast,
 }) => {
   const [filterSeverity, setFilterSeverity] = useState<SeverityLevel | 'ALL'>('ALL');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
+  const [selectedAlertForDetail, setSelectedAlertForDetail] = useState<AnomalyEvent | null>(null);
 
   const filtered = anomalies.filter((a) => {
     if (filterSeverity !== 'ALL' && a.severity !== filterSeverity) return false;
@@ -146,120 +150,147 @@ export const AlertsConsoleView: React.FC<AlertsConsoleViewProps> = ({
       {/* Anomaly Console Table */}
       <div className="bg-white rounded-[32px] p-6 border border-[#d4deda] shadow-sm">
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-xs">
-            <thead>
-              <tr className="border-b border-[#d4deda]">
-                <th className="py-3 px-3 text-left w-8">
-                  <button
-                    onClick={toggleSelectAll}
-                    className="border-none bg-transparent cursor-pointer text-[#334d4a]"
-                  >
-                    {selectedIds.length === filtered.length && filtered.length > 0 ? (
-                      <CheckSquare className="w-4 h-4 text-[#d49b28]" />
-                    ) : (
-                      <Square className="w-4 h-4 text-[#9cb1ae]" />
-                    )}
-                  </button>
-                </th>
-                <th className="text-left py-3 px-3 text-[10px] font-bold text-[#6c8582] uppercase">
-                  SEVERITY
-                </th>
-                <th className="text-left py-3 px-3 text-[10px] font-bold text-[#6c8582] uppercase">
-                  EVENT & VECTOR
-                </th>
-                <th className="text-left py-3 px-3 text-[10px] font-bold text-[#6c8582] uppercase">
-                  SOURCE IP
-                </th>
-                <th className="text-left py-3 px-3 text-[10px] font-bold text-[#6c8582] uppercase">
-                  TARGET ASSET
-                </th>
-                <th className="text-left py-3 px-3 text-[10px] font-bold text-[#6c8582] uppercase">
-                  STATUS
-                </th>
-                <th className="text-right py-3 px-3 text-[10px] font-bold text-[#6c8582] uppercase">
-                  ACTION
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((item) => {
-                const isSelected = selectedIds.includes(item.id);
-                return (
-                  <tr
-                    key={item.id}
-                    className={`border-b border-[#edf2f0] transition-colors ${
-                      isSelected ? 'bg-[#f0f5f3]' : 'hover:bg-[#f0f5f3]/60'
-                    }`}
-                  >
-                    <td className="py-3.5 px-3">
-                      <button
-                        onClick={() => toggleSelect(item.id)}
-                        className="border-none bg-transparent cursor-pointer text-[#334d4a]"
-                      >
-                        {isSelected ? (
-                          <CheckSquare className="w-4 h-4 text-[#d49b28]" />
-                        ) : (
-                          <Square className="w-4 h-4 text-[#9cb1ae]" />
-                        )}
-                      </button>
-                    </td>
-                    <td className="py-3.5 px-3">
-                      <span
-                        className={`text-[10px] font-extrabold px-2.5 py-1 rounded-full uppercase inline-block ${
-                          item.severity === 'CRITICAL'
-                            ? 'bg-[#fde8e8] text-[#d94b4b]'
-                            : item.severity === 'HIGH'
-                            ? 'bg-[#fdf3e1] text-[#b8821a]'
-                            : 'bg-[#e3f2fd] text-[#1976d2]'
-                        }`}
-                      >
-                        {item.severity}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-3">
-                      <b className="block text-[#253835] font-bold">{item.event}</b>
-                      <small className="text-[#6c8582] text-[10px] block">
-                        {item.attackVector || 'Network Spike'}
-                      </small>
-                    </td>
-                    <td className="py-3.5 px-3 font-mono-code font-bold text-[#334d4a]">
-                      {item.ip}
-                    </td>
-                    <td className="py-3.5 px-3 font-mono-code text-[#6c8582]">
-                      {item.asset}
-                    </td>
-                    <td className="py-3.5 px-3">
-                      <span
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                          item.status === 'CONFIRMED' || item.status === 'MITIGATED'
-                            ? 'bg-[#e8f5e9] text-[#2d9d78]'
-                            : 'bg-[#dce3e0] text-[#334d4a]'
-                        }`}
-                      >
-                        {item.status}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-3 text-right">
-                      <button
-                        onClick={() => onReviewAnomaly(item.id)}
-                        className={`text-xs font-bold py-1.5 px-4 rounded-full border-none cursor-pointer transition-all ${
-                          item.status === 'CONFIRMED' || item.status === 'MITIGATED'
-                            ? 'bg-[#2d9d78] text-white'
-                            : 'bg-[#d49b28] hover:bg-[#b8821a] text-white'
-                        }`}
-                      >
-                        {item.status === 'CONFIRMED' || item.status === 'MITIGATED'
-                          ? 'Mitigated'
-                          : 'Triage'}
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          {filtered.length === 0 ? (
+            <div className="py-12 px-4 text-center bg-[#f8faf9] rounded-2xl border border-dashed border-[#c2d1cc]">
+              <ShieldCheck className="w-8 h-8 text-[#2d9d78] mx-auto mb-2 opacity-70" />
+              <p className="text-xs font-bold text-[#334d4a] m-0">No Security Alerts Found</p>
+              <p className="text-[11px] text-[#6c8582] mt-1 m-0">
+                There are no alerts in database matching the severity filter '{filterSeverity}'.
+              </p>
+            </div>
+          ) : (
+            <table className="w-full border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-[#d4deda]">
+                  <th className="py-3 px-3 text-left w-8">
+                    <button
+                      onClick={toggleSelectAll}
+                      className="border-none bg-transparent cursor-pointer text-[#334d4a]"
+                    >
+                      {selectedIds.length === filtered.length && filtered.length > 0 ? (
+                        <CheckSquare className="w-4 h-4 text-[#d49b28]" />
+                      ) : (
+                        <Square className="w-4 h-4 text-[#9cb1ae]" />
+                      )}
+                    </button>
+                  </th>
+                  <th className="text-left py-3 px-3 text-[10px] font-bold text-[#6c8582] uppercase">
+                    SEVERITY
+                  </th>
+                  <th className="text-left py-3 px-3 text-[10px] font-bold text-[#6c8582] uppercase">
+                    EVENT & VECTOR
+                  </th>
+                  <th className="text-left py-3 px-3 text-[10px] font-bold text-[#6c8582] uppercase">
+                    SOURCE IP
+                  </th>
+                  <th className="text-left py-3 px-3 text-[10px] font-bold text-[#6c8582] uppercase">
+                    TARGET ASSET
+                  </th>
+                  <th className="text-left py-3 px-3 text-[10px] font-bold text-[#6c8582] uppercase">
+                    STATUS
+                  </th>
+                  <th className="text-right py-3 px-3 text-[10px] font-bold text-[#6c8582] uppercase">
+                    ACTION
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((item) => {
+                  const isSelected = selectedIds.includes(item.id);
+                  return (
+                    <tr
+                      key={item.id}
+                      className={`border-b border-[#edf2f0] transition-colors ${
+                        isSelected ? 'bg-[#f0f5f3]' : 'hover:bg-[#f0f5f3]/60'
+                      }`}
+                    >
+                      <td className="py-3.5 px-3">
+                        <button
+                          onClick={() => toggleSelect(item.id)}
+                          className="border-none bg-transparent cursor-pointer text-[#334d4a]"
+                        >
+                          {isSelected ? (
+                            <CheckSquare className="w-4 h-4 text-[#d49b28]" />
+                          ) : (
+                            <Square className="w-4 h-4 text-[#9cb1ae]" />
+                          )}
+                        </button>
+                      </td>
+                      <td className="py-3.5 px-3">
+                        <span
+                          className={`text-[10px] font-extrabold px-2.5 py-1 rounded-full uppercase inline-block ${
+                            item.severity === 'CRITICAL'
+                              ? 'bg-[#fde8e8] text-[#d94b4b]'
+                              : item.severity === 'HIGH'
+                              ? 'bg-[#fdf3e1] text-[#b8821a]'
+                              : 'bg-[#e3f2fd] text-[#1976d2]'
+                          }`}
+                        >
+                          {item.severity}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-3">
+                        <b className="block text-[#253835] font-bold">{item.event}</b>
+                        <small className="text-[#6c8582] text-[10px] block">
+                          {item.attackVector || 'Network Spike'}
+                        </small>
+                      </td>
+                      <td className="py-3.5 px-3 font-mono-code font-bold text-[#334d4a]">
+                        {item.ip}
+                      </td>
+                      <td className="py-3.5 px-3 font-mono-code text-[#6c8582]">
+                        {item.asset}
+                      </td>
+                      <td className="py-3.5 px-3">
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            item.status === 'CONFIRMED' || item.status === 'MITIGATED'
+                              ? 'bg-[#e8f5e9] text-[#2d9d78]'
+                              : 'bg-[#dce3e0] text-[#334d4a]'
+                          }`}
+                        >
+                          {item.status}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-3 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            onClick={() => setSelectedAlertForDetail(item)}
+                            className="text-xs font-bold py-1.5 px-3 rounded-full border border-[#d4deda] hover:bg-[#f0f5f3] text-[#334d4a] bg-white cursor-pointer flex items-center gap-1 transition-all"
+                          >
+                            <Eye className="w-3.5 h-3.5 text-[#d49b28]" />
+                            <span>Details</span>
+                          </button>
+                          <button
+                            onClick={() => onReviewAnomaly(item.id)}
+                            className={`text-xs font-bold py-1.5 px-4 rounded-full border-none cursor-pointer transition-all ${
+                              item.status === 'CONFIRMED' || item.status === 'MITIGATED'
+                                ? 'bg-[#2d9d78] text-white'
+                                : 'bg-[#d49b28] hover:bg-[#b8821a] text-white'
+                            }`}
+                          >
+                            {item.status === 'CONFIRMED' || item.status === 'MITIGATED'
+                              ? 'Mitigated'
+                              : 'Triage'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
+
+      {/* Alert Detail Drawer with AI Security Analysis */}
+      <AlertDetailDrawer
+        alert={selectedAlertForDetail}
+        onClose={() => setSelectedAlertForDetail(null)}
+        onReviewAlert={onReviewAnomaly}
+        onTriggerToast={onTriggerToast}
+      />
     </div>
   );
 };

@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { SecurityRule } from '../types';
+import { logAuditAction } from '../lib/auditLogger';
+import { useAuth } from '../context/AuthContext';
 import { SlidersHorizontal, Plus, Power, Terminal, Play, CheckCircle2, Shield } from 'lucide-react';
 
 interface RulesEngineViewProps {
@@ -13,6 +15,7 @@ export const RulesEngineView: React.FC<RulesEngineViewProps> = ({
   onToggleRule,
   onAddRule,
 }) => {
+  const { profile } = useAuth();
   const [testPayload, setTestPayload] = useState("GET /search?q=1' OR '1'='1 HTTP/1.1");
   const [testPattern, setTestPattern] = useState("(?i)(union\\s+select|select\\s+.*\\s+from|\\\'\\s*or\\s*\\\'1\\\'=\\\'1\\\')");
   const [testResult, setTestResult] = useState<{ matched: boolean; matchText?: string } | null>(null);
@@ -55,6 +58,14 @@ export const RulesEngineView: React.FC<RulesEngineViewProps> = ({
     };
 
     onAddRule(rule);
+    logAuditAction({
+      user: profile?.email || 'ANALYST',
+      action: 'RULE_CREATED',
+      entity: rule.id,
+      old_value: null,
+      new_value: rule,
+    });
+
     setIsAddOpen(false);
     setNewRuleName('');
     setNewRulePattern('');
@@ -205,7 +216,17 @@ export const RulesEngineView: React.FC<RulesEngineViewProps> = ({
                   </td>
                   <td className="py-3.5 px-3 text-right">
                     <button
-                      onClick={() => onToggleRule(rule.id)}
+                      onClick={() => {
+                        const newStatus = rule.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE';
+                        onToggleRule(rule.id);
+                        logAuditAction({
+                          user: profile?.email || 'ANALYST',
+                          action: 'RULE_UPDATED',
+                          entity: rule.id,
+                          old_value: { status: rule.status },
+                          new_value: { status: newStatus },
+                        });
+                      }}
                       className={`px-3 py-1 rounded-full text-[11px] font-bold border-none cursor-pointer flex items-center gap-1.5 ml-auto transition-all ${
                         rule.status === 'ACTIVE'
                           ? 'bg-[#2d9d78] text-white'
