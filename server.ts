@@ -8,7 +8,7 @@ dotenv.config();
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
   app.use(express.json());
 
@@ -175,8 +175,14 @@ Provide a structured analysis including:
     }
   });
 
+  // Health check endpoint for cloud uptime monitors & deployments
+  app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', service: 'CyberOrbit SOC Command', timestamp: new Date().toISOString() });
+  });
+
   // Vite middleware or production build handling
-  if (process.env.NODE_ENV !== 'production') {
+  const isDev = process.env.NODE_ENV === 'development' || (!process.env.NODE_ENV && process.env.npm_lifecycle_event === 'dev');
+  if (isDev) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
